@@ -95,6 +95,7 @@ def paged_attention_pypto_swpipe(  # noqa: PLR0913 -- fused Phase-0/attention AP
     scratch_ready_tid: pl.Scalar[pl.TASK_ID],
 ) -> pl.Scalar[pl.TASK_ID]:
     """Run fused Q/K norm, RoPE, cache append, and dynamic paged attention."""
+    attn_blocks = pl.system.available_cluster_count()
     active_batch = pl.tensor.dim(seq_lens, 0)
     num_tasks = active_batch * NUM_KV_HEADS
     query_rows = pl.tensor.dim(q_tnd_flat, 0)
@@ -107,7 +108,7 @@ def paged_attention_pypto_swpipe(  # noqa: PLR0913 -- fused Phase-0/attention AP
     cache_base = layer_cache_base_token_rows
     out2d = pl.reshape(out, [query_rows, HEAD_DIM])
     with pl.spmd(
-        ATTN_SPMD_BLOCKS,
+        attn_blocks,
         name_hint="attn_swpipe_spmd",
         sync_start=True,
         allow_early_resolve=True,
@@ -258,7 +259,7 @@ def paged_attention_pypto_swpipe(  # noqa: PLR0913 -- fused Phase-0/attention AP
         pl.system.syncall(core_type=pl.KernelType.MIX)
         pl.system.cacheinvalid()
 
-        for task in pl.range(core, num_tasks, ATTN_SPMD_BLOCKS):
+        for task in pl.range(core, num_tasks, attn_blocks):
             batch = task // NUM_KV_HEADS
             kv_head = task % NUM_KV_HEADS
             seq_len = pl.read(seq_lens, [batch])
