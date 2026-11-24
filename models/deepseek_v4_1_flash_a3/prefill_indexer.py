@@ -297,7 +297,7 @@ def make_index_weights(capacity):
 
 def make_index_key_gather(cache_blocks, requests, table_pages, page_rows=64, *, key_capacity=KEY_CAPACITY):
     """Pack one request's paged INT8/FP16 index cache into the fixed QLI arena."""
-    KEY_ROWS_TILE = 32
+    KEY_ROWS_TILE = 64
 
     @pl.jit
     def index_key_gather(
