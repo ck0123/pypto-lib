@@ -329,7 +329,7 @@ def make_index_key_gather(cache_blocks, requests, table_pages, page_rows=64, *, 
             key_output[0:1, output_start:output_start + KEY_ROWS_TILE * INDEX_WIDTH] = values
             scale_output[0:1, start:start + KEY_ROWS_TILE] = scale_values
 
-        zero_rows_tile = 128
+        zero_rows_tile = 256
         zero_blocks = (key_capacity - length + zero_rows_tile - 1) // zero_rows_tile
         with pl.spmd(zero_blocks, name_hint="index_key_zero_tail", allow_early_resolve=True):
             start = length + pl.tile.get_block_idx() * zero_rows_tile
