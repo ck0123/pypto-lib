@@ -313,25 +313,34 @@ def make_index_key_gather(cache_blocks, requests, table_pages, page_rows=64, *, 
         key_output = pl.reshape(key, [1, key_capacity * INDEX_WIDTH])
         scale_flat = pl.reshape(scales, [1, cache_blocks * page_rows])
         scale_output = pl.reshape(key_scale, [1, key_capacity])
-        with pl.spmd(key_capacity // KEY_ROWS_TILE, name_hint="index_key_pack", allow_early_resolve=True):
+        data_blocks = (length + KEY_ROWS_TILE - 1) // KEY_ROWS_TILE
+        with pl.spmd(data_blocks, name_hint="index_key_pack", allow_early_resolve=True):
             start = pl.tile.get_block_idx() * KEY_ROWS_TILE
-            if start < length:
-                page = start // page_rows
-                offset = start % page_rows
-                block = pl.cast(pl.read(table, [request, page]), pl.INDEX)
-                valid = pl.min(KEY_ROWS_TILE, length - start)
-                source_offset = (block * page_rows + offset) * INDEX_WIDTH
-                source = pl.slice(flat, [1, KEY_ROWS_TILE * INDEX_WIDTH], [0, source_offset], valid_shape=[1, valid * INDEX_WIDTH])
-                values = pl.set_validshape(pl.fillpad(source, pad_value=pl.PadValue.zero), 1, KEY_ROWS_TILE * INDEX_WIDTH)
-                scale_source = pl.slice(scale_flat, [1, KEY_ROWS_TILE], [0, block * page_rows + offset], valid_shape=[1, valid])
-                scale_values = pl.set_validshape(pl.fillpad(scale_source, pad_value=pl.PadValue.zero), 1, KEY_ROWS_TILE)
-            else:
-                zero_values = pl.full([1, KEY_ROWS_TILE * INDEX_WIDTH], dtype=pl.FP16, value=0.0)
-                values = pl.cast(zero_values, pl.INT8, mode="trunc")
-                scale_values = pl.full([1, KEY_ROWS_TILE], dtype=pl.FP16, value=0.0)
+            page = start // page_rows
+            offset = start % page_rows
+            block = pl.cast(pl.read(table, [request, page]), pl.INDEX)
+            valid = pl.min(KEY_ROWS_TILE, length - start)
+            source_offset = (block * page_rows + offset) * INDEX_WIDTH
+            source = pl.slice(flat, [1, KEY_ROWS_TILE * INDEX_WIDTH], [0, source_offset], valid_shape=[1, valid * INDEX_WIDTH])
+            values = pl.set_validshape(pl.fillpad(source, pad_value=pl.PadValue.zero), 1, KEY_ROWS_TILE * INDEX_WIDTH)
+            scale_source = pl.slice(scale_flat, [1, KEY_ROWS_TILE], [0, block * page_rows + offset], valid_shape=[1, valid])
+            scale_values = pl.set_validshape(pl.fillpad(scale_source, pad_value=pl.PadValue.zero), 1, KEY_ROWS_TILE)
             output_start = start * INDEX_WIDTH
             key_output[0:1, output_start:output_start + KEY_ROWS_TILE * INDEX_WIDTH] = values
             scale_output[0:1, start:start + KEY_ROWS_TILE] = scale_values
+
+        zero_rows_tile = 128
+        zero_blocks = (key_capacity - length + zero_rows_tile - 1) // zero_rows_tile
+        with pl.spmd(zero_blocks, name_hint="index_key_zero_tail", allow_early_resolve=True):
+            start = length + pl.tile.get_block_idx() * zero_rows_tile
+            valid = pl.min(zero_rows_tile, key_capacity - start)
+            zero_values = pl.full([1, zero_rows_tile * INDEX_WIDTH], dtype=pl.FP16, value=0.0)
+            values = pl.cast(zero_values, pl.INT8, mode="trunc")
+            key_output[0:1, start * INDEX_WIDTH:(start + zero_rows_tile) * INDEX_WIDTH] = pl.set_validshape(
+                values, 1, valid * INDEX_WIDTH,
+            )
+            scale_values = pl.full([1, zero_rows_tile], dtype=pl.FP16, value=0.0)
+            scale_output[0:1, start:start + zero_rows_tile] = pl.set_validshape(scale_values, 1, valid)
         return key, key_scale
 
     return index_key_gather
